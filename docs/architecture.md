@@ -7,69 +7,52 @@
 
 ## Purpose
 
-Fleet Gateway is the collection of UI surfaces onto the GuardKit NATS message bus. Each gateway connects a different modality to the same fleet of agents. The gateways are thin transport adapters — they don't contain agent logic, orchestration, or business rules. All intelligence lives in the agents.
+Fleet Gateway holds the UI surfaces onto the GuardKit NATS message bus. All gateways route through **Jarvis** — the fleet's intent router and supervisor. Jarvis receives natural language, decides which specialist agent can handle it, constructs structured requests, and dispatches via NATS.
+
+Gateways are thin transport adapters. They translate from their modality (HTTP chat, voice) to NATS and back. All routing intelligence lives in Jarvis; all specialist intelligence lives in the agents.
+
+---
+
+## Architecture
+
+```
+Gateway (Open WebUI / Reachy / future)
+    │
+    │ NATS request/reply
+    ▼
+Jarvis (Qwen3.6-35B-A3B, 3B active)
+    │ supervisor decides: dispatch_by_capability / queue_build
+    │ constructs structured CommandPayload
+    │
+    ├──► specialist-agent (architect / product-owner)
+    ├──► study-tutor
+    └──► forge
+```
+
+**Exception — hackathon path:** Reachy Mini Scholar reads directly from Graphiti (no Jarvis, no NATS). This is a temporary shortcut for Scenario 1 ("How's her revision going?"). Post-hackathon, Scholar becomes a full NATS gateway routing through Jarvis.
 
 ---
 
 ## Gateway inventory
 
-| Gateway | Modality | Transport to agents | Status |
+| Gateway | Modality | Transport | Status |
 |---|---|---|---|
-| **Open WebUI Pipe Function** | Web chat (browser) | NATS request/reply | Phase 1 in progress |
-| **Reachy Mini "Scholar"** | Physical robot (voice) | Direct Graphiti read (hackathon); NATS (post-hackathon) | Profile created, tool skeleton ready |
-| *(future)* Telegram adapter | Mobile messaging | NATS request/reply | Deferred |
-| *(future)* REST API facade | HTTP clients | NATS request/reply | Not scoped |
-
----
-
-## Open WebUI Pipe Function
-
-```
-Browser ──► Open WebUI ──► NATS Pipe Function ──► NATS ──► Agent ──► llama-swap
-                                                              │
-                                                              ▼
-                                                          Graphiti
-```
-
-The Pipe Function registers agents as selectable models via the `pipes()` manifold. The `pipe()` method publishes a `CommandPayload` to the agent's NATS command topic and returns the `ResultPayload`. No intermediary LLM routes the request — the user's model selection determines the NATS topic deterministically.
-
-Wire format: nats-core `MessageEnvelope` → `CommandPayload` / `ResultPayload`.
-
-NATS topics:
-- Publish: `agents.command.{agent_id}` (via `Topics.resolve()`)
-- Subscribe (for response): NATS request/reply inbox (automatic)
-
----
-
-## Reachy Mini "Scholar"
-
-### Hackathon path (direct Graphiti read)
-
-```
-Voice ──► Reachy Mini ──► Gemini Live ──► query_student_model tool ──► Graphiti
-```
-
-Scholar is a Pollen `reachy_mini_conversation_app` custom profile. Gemini Live handles the conversation. When the user asks about study progress, Gemini calls the `query_student_model` tool, which reads directly from Graphiti. No NATS, no tutor agent involved — Scholar is a read-only consumer of the student model.
-
-### Post-hackathon path (NATS gateway)
-
-```
-Voice ──► Reachy Mini ──► NATS adapter ──► NATS ──► Agents
-```
-
-Scholar becomes a NATS publisher, like the Open WebUI Pipe Function. Voice input is transcribed (Whisper on GB10 or Gemini Live STT), published to agent command topics, and responses are spoken via TTS. This is the "Ship's Computer" pattern documented in `jarvis/docs/research/ideas/reachy-mini-integration.md`.
+| **Open WebUI Pipe Function** | Web chat (browser) | NATS → Jarvis → agents | Pipe Function written; Jarvis serve-nats in progress |
+| **Reachy Mini "Scholar"** | Physical robot (voice) | Direct Graphiti read (hackathon); NATS → Jarvis (post-hackathon) | Profile created, tool skeleton ready |
+| *(future)* Telegram adapter | Mobile messaging | NATS → Jarvis | Deferred |
+| *(future)* REST API facade | HTTP clients | NATS → Jarvis | Not scoped |
 
 ---
 
 ## Design principles
 
-1. **Gateways are thin.** No business logic in the gateway. If you're writing an if/else that decides how to tutor, it belongs in the agent, not the gateway.
+1. **All gateways route through Jarvis.** No gateway calls a specialist agent directly (except Scholar's hackathon shortcut, which is temporary). Jarvis handles intent classification and argument extraction so specialist agents receive clean structured commands.
 
-2. **NATS is the only internal transport.** Gateways translate from their modality (HTTP, voice, WebSocket) to NATS. Agents only speak NATS. This means adding a new UI surface doesn't require changes to any agent.
+2. **Gateways are thin.** If you're writing an if/else that decides how to tutor or review architecture, it belongs in an agent, not a gateway. The Open WebUI Pipe Function is ~60 lines. Scholar's tool is ~80 lines.
 
-3. **nats-core is the wire contract.** All NATS messages use the shared Pydantic models from nats-core. The gateway and the agent must agree on `MessageEnvelope`, `CommandPayload`, `ResultPayload`. If the contract changes, it changes in nats-core and both sides update.
+3. **One gateway per modality, not per agent.** The Pipe Function doesn't need a separate entry per agent. It sends everything to Jarvis. Adding a new agent means registering it in the fleet; no gateway changes needed.
 
-4. **One gateway per modality, not per agent.** The Open WebUI Pipe Function exposes ALL agents via a manifold. A Telegram adapter would do the same. Don't build one gateway per agent — build one gateway per modality that routes to all agents.
+4. **nats-core is the wire contract.** `MessageEnvelope`, `CommandPayload`, `ResultPayload`. Same models between the Pipe Function and Jarvis, between Jarvis and agents, between any future gateway and Jarvis.
 
 ---
 
@@ -77,8 +60,8 @@ Scholar becomes a NATS publisher, like the Open WebUI Pipe Function. Voice input
 
 | Decision | Location |
 |---|---|
-| Open WebUI + NATS replaces Claude Desktop | `study-tutor/docs/talks/openwebui-nats-pipe-architecture.md` |
-| Everything on GB10 (dark factory topology) | Same doc, "Architecture" section |
-| NATS everywhere, no MCP in production path | Same doc, "What this replaces" section |
-| Embeddings via llama-swap, not Ollama | `ddd-southwest-demo-strategy.md` v3, decisions table |
-| ChromaDB PersistentClient on GB10 | Same |
+| Open WebUI + NATS via Jarvis (full rationale) | `study-tutor/docs/talks/openwebui-nats-pipe-architecture.md` |
+| Jarvis serve-nats scope | `jarvis/features/feat-jarvis-006-nats-chat-gateway/` |
+| Study-tutor serve-nats scope | `study-tutor/features/nats-fleet-integration/` |
+| Everything on GB10 (dark factory topology) | Demo strategy v4 |
+| DECISION-DF-001 (no cloud on critical path) | `guardkit/docs/decisions/` |
