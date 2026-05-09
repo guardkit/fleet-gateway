@@ -1,0 +1,105 @@
+id: FEAT-FG-001
+name: Fleet Gateway Common + Gateway Interfaces
+description: Shared common/ gateway client library (envelope, JarvisClient,
+  GraphitiClient) wired into OpenWebUI Pipe Function and Reachy Mini external
+  tools (Scholar + Bridge profiles). Reconciles the build plan with scope §7
+  resolutions (drop aiohttp, drop query_status, graphiti-core direct to FalkorDB,
+  student-lilymay group, send_command for Bridge).
+created: '2026-05-09T14:08:46.036290'
+status: planned
+complexity: 6
+estimated_tasks: 6
+
+tasks:
+  - id: TASK-FG-001
+    name: Package setup + envelope module
+    file_path: tasks/backlog/fleet-gateway-common-and-interfaces/TASK-FG-001-package-setup-envelope-module.md
+    complexity: 3
+    dependencies: []
+    status: pending
+    description: ''
+    implementation_mode: direct
+    estimated_minutes: 45
+
+  - id: TASK-FG-002
+    name: Jarvis NATS client
+    file_path: tasks/backlog/fleet-gateway-common-and-interfaces/TASK-FG-002-jarvis-nats-client.md
+    complexity: 5
+    dependencies:
+      - TASK-FG-001
+    status: pending
+    description: ''
+    implementation_mode: task-work
+    estimated_minutes: 75
+
+  - id: TASK-FG-003
+    name: Graphiti client (graphiti-core direct to FalkorDB)
+    file_path: tasks/backlog/fleet-gateway-common-and-interfaces/TASK-FG-003-graphiti-client.md
+    complexity: 5
+    dependencies:
+      - TASK-FG-001
+    status: pending
+    description: ''
+    implementation_mode: task-work
+    estimated_minutes: 75
+
+  - id: TASK-FG-004
+    name: OpenWebUI Pipe Function refactor
+    file_path: tasks/backlog/fleet-gateway-common-and-interfaces/TASK-FG-004-openwebui-pipe-refactor.md
+    complexity: 4
+    dependencies:
+      - TASK-FG-002
+    status: pending
+    description: ''
+    implementation_mode: task-work
+    estimated_minutes: 60
+
+  - id: TASK-FG-005
+    name: Scholar tools + profile (hackathon critical path)
+    file_path: tasks/backlog/fleet-gateway-common-and-interfaces/TASK-FG-005-scholar-tools-and-profile.md
+    complexity: 6
+    dependencies:
+      - TASK-FG-003
+    status: pending
+    description: ''
+    implementation_mode: task-work
+    estimated_minutes: 110
+
+  - id: TASK-FG-006
+    name: Bridge profile + agent_status tool
+    file_path: tasks/backlog/fleet-gateway-common-and-interfaces/TASK-FG-006-bridge-profile-agent-status.md
+    complexity: 4
+    dependencies:
+      - TASK-FG-002
+    status: pending
+    description: ''
+    implementation_mode: task-work
+    estimated_minutes: 60
+
+orchestration:
+  parallel_groups:
+    - - TASK-FG-001
+    - - TASK-FG-002
+      - TASK-FG-003
+    - - TASK-FG-004
+      - TASK-FG-005
+      - TASK-FG-006
+  estimated_duration_minutes: 425
+  recommended_parallel: 3
+
+# Feature-level smoke gates (R3) — DEFERRED until after Wave 1 has produced
+# tests/. The path validator (TASK-FPSG-002) requires referenced test roots
+# to exist at YAML-load time; tests/ is created by TASK-FG-001. Once Wave 1
+# has run, add the following block to enable between-wave smoke checks:
+#
+#     smoke_gates:
+#       after_wave: [2, 3]
+#       command: |
+#         set -e
+#         pytest tests/ -x --tb=short
+#       expected_exit: 0
+#       timeout: 180
+#
+# Adding this is high-leverage (catches composition failures that per-task
+# Coach approval misses). The R3 nudge will print at /feature-build time as
+# a reminder.

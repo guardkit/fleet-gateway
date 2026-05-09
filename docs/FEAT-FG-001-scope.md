@@ -136,14 +136,21 @@ fleet-gateway/
 
 ### 3.3 Dependency Graph
 
+> Updated 9 May per Q1: drop `aiohttp` (no REST API to call), add `graphiti-core` (talks to FalkorDB directly via `redis://whitestocks:6379`).
+
 ```
 fleet-gateway/common/
     ├── nats-py (>=2.9.0)         # NATS client
     ├── pydantic (>=2.0)          # Envelope models
-    └── aiohttp (>=3.9.0)        # HTTP client for Graphiti
+    └── graphiti-core             # Direct FalkorDB read for Scholar
+                                  # (the deployed graphiti-mcp:8004 speaks MCP,
+                                  #  not REST — see §7 Q1)
 
 fleet-gateway/openwebui/
     └── common/                   # Imports envelope + JarvisClient
+                                  # NOTE: cannot pip-install at runtime — the
+                                  # deployable .py must be self-contained.
+                                  # See §7 Q4.
 
 fleet-gateway/reachy/external_tools/
     └── common/                   # Imports GraphitiClient (Scholar)
@@ -277,23 +284,24 @@ class JarvisClient:
         """
         ...
 
-    async def query_status(self, agent: str = "all") -> str:
-        """Query fleet status via NATS request-reply.
-
-        Args:
-            agent: Specific agent ID or "all" for fleet-wide.
-
-        Returns:
-            Status report text.
-        """
-        ...
+    # NOTE (9 May, §7 Q3): `query_status()` is dropped. There is no
+    # `jarvis.status.query` topic in nats-core; the Bridge `agent_status`
+    # tool now calls `send_command("what's the fleet status?")` and lets
+    # Jarvis narrate. Removing this method keeps JarvisClient as a single
+    # request-reply primitive over `agents.command.jarvis`.
 ```
 
 ### 4.3 common/graphiti_client.py
 
+> Revised 9 May per §7 Q1 / §6 A1. The deployed Graphiti is the **MCP server** at
+> `http://promaxgb10-41b1:8004/mcp/`, not a REST `/search` server. Rather than
+> implement an MCP-over-HTTP client inside a Pollen tool, GraphitiClient wraps
+> `graphiti-core` and connects to FalkorDB directly (matches the proven pattern
+> in [`guardkit/guardkit/knowledge/graphiti_client.py`](../../guardkit/guardkit/knowledge/graphiti_client.py)).
+
 ```python
 class GraphitiClient:
-    """Async HTTP client for querying the Graphiti knowledge graph.
+    """Async client for querying the Graphiti knowledge graph via graphiti-core.
 
     Used by Scholar's query_student_model tool for direct reads
     (hackathon shortcut). Post-hackathon, this gets replaced by
@@ -302,8 +310,8 @@ class GraphitiClient:
 
     def __init__(
         self,
-        graphiti_url: str = "http://localhost:8000",
-        group_ids: list[str] | None = None,
+        falkordb_uri: str = "redis://whitestocks:6379",  # Synology via Tailscale
+        default_group_ids: list[str] | None = None,      # e.g. ["student-lilymay"]
     ):
         ...
 
@@ -415,14 +423,18 @@ Feature: Scholar query_student_model tool
 
 ### 5.3 Bridge Tools
 
+> Revised 9 May per §7 Q3. `jarvis.status.query` is not a real topic; the Bridge
+> reuses the existing `agents.command.jarvis` request-reply path via JarvisClient.
+
 ```gherkin
 Feature: Bridge agent_status tool
 
-  Scenario: Query fleet status via NATS
+  Scenario: Query fleet status via Jarvis
     Given JarvisClient is connected to NATS on GB10
-    When the agent_status tool is called with agent "all"
-    Then the result contains fleet status text
-    And the NATS topic used is "jarvis.status.query"
+    When the agent_status tool is called
+    Then the tool publishes a CommandPayload to "agents.command.jarvis"
+    And the request body contains a fleet-status query
+    And the result is a formatted text status report
 
   Scenario: Graceful degradation when NATS unreachable
     Given NATS server is not reachable
@@ -435,25 +447,27 @@ Feature: Bridge agent_status tool
 
 ## 6. Assumptions
 
-| ID | Assumption | Confidence | Impact if Wrong |
-|----|-----------|------------|-----------------|
-| A1 | Graphiti HTTP API exposes `/search` endpoint with `query` + `group_ids` params | Medium | Need to check actual Graphiti REST API shape. MCP tools use different interface. |
-| A2 | Pollen's `core_tools.Tool` subclass supports async `run()` method | High | Already confirmed in existing skeleton |
-| A3 | `PYTHONPATH` extension works for importing common/ into Pollen tools | High | Standard Python mechanism, tested in similar setups |
-| A4 | Scholar's Gemini Live backend handles tool calling with custom tools | High | Confirmed by Pollen video — astronomy app demonstrates this |
-| A5 | nats-py works in the same async context as Pollen's conversation loop | Medium | Both asyncio-native, but untested together |
-| A6 | Graphiti student model group ID is `study_tutor__student_model` | Medium | Depends on how study-tutor seeds Graphiti; may need alignment |
+| ID | Assumption | Confidence | Impact if Wrong | Status (9 May verification) |
+|----|-----------|------------|-----------------|-----------------------------|
+| A1 | Graphiti HTTP API exposes `/search` endpoint with `query` + `group_ids` params | ~~Medium~~ | Need to check actual Graphiti REST API shape. MCP tools use different interface. | **REJECTED.** The deployed `graphiti-mcp` container speaks **MCP over HTTP at `http://promaxgb10-41b1:8004/mcp/`** (JSON-RPC 2.0, not REST). The REST `graph_service` (`/search`, `/get-memory`) is in `graphiti/server/` source but is **not deployed**. Live tools are `search_nodes`, `search_memory_facts`, `add_memory`, `get_episodes`, etc. — see Q1 below for the corrected client design. |
+| A2 | Pollen's `core_tools.Tool` subclass supports async `run()` method | High | Already confirmed in existing skeleton | Confirmed (no change). |
+| A3 | `PYTHONPATH` extension works for importing common/ into Pollen tools | High | Standard Python mechanism, tested in similar setups | Holds for the Reachy side (Pollen runs on the MacBook). **Does not hold for Open WebUI** — see Q4. |
+| A4 | Scholar's Gemini Live backend handles tool calling with custom tools | High | Confirmed by Pollen video — astronomy app demonstrates this | Confirmed (no change). |
+| A5 | nats-py works in the same async context as Pollen's conversation loop | Medium | Both asyncio-native, but untested together | **Still Medium, but de-risked.** nats-py is the fleet-wide standard (jarvis, study-tutor, specialist-agent all use it on the GB10) and Pollen is asyncio-native. The remaining risk is loop ownership — mitigation is to use a **connect-per-call** pattern in Bridge tools (matches the OpenWebUI pipe at [openwebui/nats_fleet_pipe.py:126](../openwebui/nats_fleet_pipe.py#L126)), so we never share a long-lived NATS connection across Pollen's conversation turns. To be confirmed on first end-to-end run. |
+| A6 | Graphiti student model group ID is `study_tutor__student_model` | ~~Medium~~ | Depends on how study-tutor seeds Graphiti; may need alignment | **REJECTED.** Actual prefix in [`study-tutor/src/study_tutor/knowledge/student_model.py:67`](../../study-tutor/src/study_tutor/knowledge/student_model.py#L67) is `STUDENT_GROUP_PREFIX = "student-"`. The student group id is **`student-lilymay`** (dash form, not double-underscore — graphiti-core 0.29 rejects `:` and the colon-form was dropped at integration). Cross-product writes go to `fleet-appmilla` (`FLEET_GROUP_ID`). Note: the `pkg__name` double-underscore convention is a **guardkit** namespace pattern (`guardkit__project_overview`), not a study-tutor pattern. Scholar must query `student-{student_name}`. |
 
 ---
 
 ## 7. Open Questions
 
-| Question | Resolution Path |
-|----------|----------------|
-| What is the exact Graphiti HTTP API shape? | Check Graphiti server source / test against running instance on GB10 |
-| Does Scholar need a `get_revision_recommendations` tool for hackathon? | No — keep scope minimal. `query_student_model` is sufficient for Scenario 1 |
-| Should Bridge `agent_status` return raw NATS response or formatted text? | Formatted text — the LLM narrates it, so structured data is better than raw JSON |
-| Can the OpenWebUI pipe use fleet-gateway as a pip dependency? | Test — may need to be a standalone copy due to Open WebUI's Pipe isolation model |
+> **Status as of 9 May 2026** — all four questions resolved by inspecting the live deployment on this GB10 host (`promaxgb10-41b1`) plus the `graphiti`, `guardkit`, `study-tutor`, `nats-core`, and `jarvis` source trees. Resolutions below; assumption corrections in §6.
+
+| # | Question | Resolution |
+|---|----------|------------|
+| Q1 | What is the exact Graphiti HTTP API shape? | **MCP-over-HTTP, not REST.** Single endpoint `http://promaxgb10-41b1:8004/mcp/` (note trailing slash — `/mcp` returns 307). Streamable-HTTP transport, MCP protocol version `2024-11-05`, server identity `Graphiti Agent Memory v1.26.0`. Tool surface (verified by live `tools/list`): `add_memory`, `search_nodes`, `search_memory_facts`, `delete_entity_edge`, `delete_episode`, `get_entity_edge`, `get_episodes`, `clear_graph`, `get_status`. Both search tools accept `query: str`, `group_ids: list[str] \| None`, `max_nodes`/`max_facts: int` (and `entity_types` / `center_node_uuid` respectively). Backend DB is FalkorDB on the Synology NAS at `redis://whitestocks:6379` via Tailscale. Config (single source of truth): [`guardkit/scripts/graphiti-mcp-config.yaml`](../../guardkit/scripts/graphiti-mcp-config.yaml). **Implication for `common/graphiti_client.py`:** the original `aiohttp + POST /search` design (§3.3, §4.3) is wrong for our deployment. Choose one of: (a) use `graphiti-core` Python lib and connect to FalkorDB directly (mirrors [`guardkit/guardkit/knowledge/graphiti_client.py`](../../guardkit/guardkit/knowledge/graphiti_client.py) — proven pattern, but Scholar would need Tailscale access to `whitestocks` from the MacBook); (b) speak MCP-over-HTTP to `:8004` from a small client (matches existing `.mcp.json` wiring across the fleet). **Recommendation: option (a)** — `graphiti-core` directly. It avoids the MCP session/redirect/SSE plumbing inside a Pollen tool, gives Scholar identical read semantics to study-tutor, and the Tailscale dependency already exists in the Reachy README's prerequisites. Drop `aiohttp` from §3.3 deps; add `graphiti-core` and FalkorDB client. |
+| Q2 | Does Scholar need a `get_revision_recommendations` tool for hackathon? | **No — confirmed.** Keep scope minimal; `query_student_model` covers Scenario 1. Recommendations require the study-tutor planner pipeline ([`study_tutor.planner.pipeline`](../../study-tutor/src/study_tutor/planner/pipeline.py)), not a read-only Graphiti search — that belongs behind a NATS-routed `study-tutor` agent call (FEAT-FG-002 territory). |
+| Q3 | Should Bridge `agent_status` return raw NATS response or formatted text? | **Formatted text, via JarvisClient — not a separate topic.** The Gherkin in §5.3 names `jarvis.status.query`, which **does not exist in nats-core**. Real topics ([`nats-core/src/nats_core/topics.py`](../../nats-core/src/nats_core/topics.py)) are `agents.status.{agent_id}`, `agents.status.>`, `fleet.heartbeat.{agent_id}`, `fleet.heartbeat.>`, and the per-adapter `agents.command.jarvis` request-reply that the OpenWebUI pipe already uses. **Recommendation:** drop `JarvisClient.query_status()` as a distinct method (§4.2) and have the Bridge `agent_status` tool simply call `JarvisClient.send_command("what's the fleet status?")` — Jarvis already owns supervisor/status reasoning, and the LLM-on-Reachy narrates the response text directly. Update Scenario 5.3 to remove the invented topic. (If we later want a low-latency status path that bypasses Jarvis, subscribe briefly to `fleet.heartbeat.>` and aggregate — but not for FEAT-FG-001.) |
+| Q4 | Can the OpenWebUI pipe use fleet-gateway as a pip dependency? | **No — confirmed by inspection of the running container.** `docker exec open-webui python -c "import nats"` raises `ModuleNotFoundError`; the Open WebUI image (`ghcr.io/open-webui/open-webui:main`) does not ship nats-py and Pipe Functions execute inside that interpreter. So neither `nats-py` nor `fleet-gateway-common` can be `import`ed from a pasted Workspace Function. Two paths: **(A) Workspace Function (current, hackathon)** — keep `nats_fleet_pipe.py` as a single self-contained file; share code with `common/` only at *source* level (the file imports from `common/` during tests but the deployable artifact is a flattened single file, generated by a small build step or maintained manually). **(B) Pipelines container (post-hackathon)** — separate image we control where `pip install -e fleet-gateway` works; the same `Pipe` class then `from common.envelope import …` cleanly. **Decision for FEAT-FG-001:** target (A). Refactor for testability (extract envelope/parse helpers into `common/`), then keep the deployable `nats_fleet_pipe.py` self-contained — either by inlining the helpers it uses, or by a one-line build script that concatenates `common/envelope.py` ahead of the `Pipe` class. Document the divergence in [`openwebui/README.md`](../openwebui/README.md). |
 
 ---
 
