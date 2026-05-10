@@ -10,7 +10,7 @@ complexity: 3
 estimated_minutes: 45
 dependencies: []
 domain_tags: [packaging, wire-format, pydantic]
-status: pending
+status: completed
 ---
 
 # TASK-FG-001: Package Setup + Common Envelope Module

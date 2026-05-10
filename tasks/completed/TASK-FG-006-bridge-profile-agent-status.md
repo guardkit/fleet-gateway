@@ -8,15 +8,58 @@ wave: 3
 implementation_mode: task-work
 complexity: 4
 estimated_minutes: 60
-dependencies: [TASK-FG-002]
-domain_tags: [reachy, bridge, nats, tools, profile]
-status: pending
+dependencies:
+- TASK-FG-002
+domain_tags:
+- reachy
+- bridge
+- nats
+- tools
+- profile
+status: completed
 consumer_context:
-  - task: TASK-FG-002
-    consumes: JarvisClient.send_command
-    framework: "common.jarvis_client (in-process Python in Pollen venv)"
-    driver: "in-process import; fleet-gateway is editable-installed in the Pollen venv"
-    format_note: "Bridge calls `JarvisClient(adapter='reachy-bridge').send_command(\"what's the fleet status?\")` and narrates the returned text. Per scope §7 Q3, JarvisClient.query_status() does NOT exist — Bridge must use send_command on agents.command.jarvis."
+- task: TASK-FG-002
+  consumes: JarvisClient.send_command
+  framework: common.jarvis_client (in-process Python in Pollen venv)
+  driver: in-process import; fleet-gateway is editable-installed in the Pollen venv
+  format_note: "Bridge calls `JarvisClient(adapter='reachy-bridge').send_command(\"\
+    what's the fleet status?\")` and narrates the returned text. Per scope \xA77 Q3,\
+    \ JarvisClient.query_status() does NOT exist \u2014 Bridge must use send_command\
+    \ on agents.command.jarvis."
+autobuild_state:
+  current_turn: 2
+  max_turns: 5
+  worktree_path: /home/richardwoollcott/Projects/appmilla_github/fleet-gateway/.guardkit/worktrees/FEAT-FG-001
+  base_branch: main
+  started_at: '2026-05-10T08:14:15.876981'
+  last_updated: '2026-05-10T08:31:47.544269'
+  turns:
+  - turn: 1
+    decision: feedback
+    feedback: '- Advisory (non-blocking): task-work produced a report with 2 of 3
+      expected agent invocations. Missing phases: 3 (Implementation). Consider invoking
+      these agents via the Task tool to strengthen stack-specific quality:
+
+      - Phase 3: `the stack-specific Phase-3 specialist` (Implementation)
+
+      - BDD oracle: 1 scenario(s) failed during pytest-bdd execution.
+
+      Per-failure details:
+
+      - pytest_runner_error: pytest_runner_error: exit=4; ERROR: not found: /home/richardwoollcott/Projects/appmilla_github/fleet-gateway/.guardkit/worktrees/FEAT-FG-001/features/fleet-gateway-common-and-interfaces/fleet-gateway-common-and-interfaces.feat...'
+    timestamp: '2026-05-10T08:14:15.876981'
+    player_summary: 'Implementation via task-work delegation. Files planned: 0, Files
+      actual: 0'
+    player_success: true
+    coach_success: true
+  - turn: 2
+    decision: approve
+    feedback: null
+    timestamp: '2026-05-10T08:23:07.402786'
+    player_summary: 'Implementation via task-work delegation. Files planned: 0, Files
+      actual: 0'
+    player_success: true
+    coach_success: true
 ---
 
 # TASK-FG-006: Bridge Profile + Agent Status Tool

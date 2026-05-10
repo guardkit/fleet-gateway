@@ -1,1 +1,6 @@
 query_student_model
+celebrate_achievement
+camera
+emotion
+dance
+head_tracking

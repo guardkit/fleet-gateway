@@ -8,152 +8,200 @@ achievements) during tutoring sessions; this tool reads it.
 The tool returns a plain dict which Gemini Live narrates in character per
 the Scholar persona in ``instructions.txt``.
 
-Dependencies:
-    - graphiti-core (for Graphiti client)
-    - The Graphiti/FalkorDB instance must be reachable (Synology via Tailscale)
+Contract (TASK-FG-003 + scope §6 A6):
 
-Environment variables:
-    - GRAPHITI_URI: FalkorDB connection URI (default: bolt://localhost:7687)
-    - GRAPHITI_GROUP_ID: Group ID for student data (default: study_tutor__student_model)
-    - STUDENT_NAME: Student name to query (default: lilymay)
+* The Graphiti group_id used for queries is ``f"student-{student_name}"``
+  — dash form, **never** the rejected double-underscore form.
+* :meth:`GraphitiClient.search_student_progress` returns a dict with keys
+  ``student_name``, ``streak_days``, ``level_name``, ``recent_xp``,
+  ``near_achievements``, ``topic_confidence`` and ``data_available``. On
+  any failure it returns ``{"data_available": False, "error": "..."}``.
 
-TODO: This is a skeleton. The actual Graphiti query needs to be wired
-once the student model schema is confirmed and the Graphiti client
-import path works inside the Pollen tool framework. The conversation
-starter at study-tutor/docs/research/ideas/reachy-integration-conversation-starter.md
-has the detailed integration architecture.
+Graceful degradation (scope §5.2 #2): when Graphiti is unreachable the
+tool **must never crash the conversation**. It returns a narration-friendly
+dict that includes ``data_available=False``, an ``error`` message and a
+``narration_hint`` field instructing the LLM to acknowledge no data is
+available.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
+
+from common.graphiti_client import GraphitiClient
 
 logger = logging.getLogger(__name__)
 
-# Default configuration
-_DEFAULT_GRAPHITI_URI = "bolt://localhost:7687"
-_DEFAULT_GROUP_ID = "study_tutor__student_model"
-_DEFAULT_STUDENT_NAME = "lilymay"
+#: Default student name (per scope §6 A6 — Lilymay is the hackathon student).
+DEFAULT_STUDENT_NAME = "lilymay"
+
+#: Default subject for the Scholar persona (per scope §2 D5 — English).
+DEFAULT_SUBJECT = "english"
+
+#: Narration hint baked into the unreachable-degraded response so the LLM
+#: knows to acknowledge missing data instead of fabricating progress.
+_NARRATION_HINT_NO_DATA = (
+    "No study data is available right now. Acknowledge this honestly — "
+    "ask whether the tutor session has run yet — and do not invent progress, "
+    "levels, streaks or achievements."
+)
 
 
-async def _fetch_student_progress(student_name: str) -> dict[str, Any]:
-    """Query Graphiti for the student's current progress.
+def _ensure_narration_friendly(
+    progress: dict[str, Any], student_name: str
+) -> dict[str, Any]:
+    """Augment a degraded-Graphiti response with narration hints.
 
-    Reads from the shared student model written by the study-tutor agent.
-    Returns a dict with the fields Scholar needs to narrate a progress report.
-
-    This is the integration point. The query shape depends on how the
-    study-tutor writes session data to Graphiti — topic confidence nodes,
-    gamification state entities, session episode metadata.
+    The ``GraphitiClient`` already returns ``{"data_available": False,
+    "error": "..."}`` on connection / auth failures. The Scholar tool layers
+    on a ``narration_hint`` and a ``student_name`` so the LLM can produce a
+    natural in-character apology rather than crashing.
 
     Args:
-        student_name: The student to query (e.g. "lilymay").
+        progress: The dict returned by
+            :meth:`GraphitiClient.search_student_progress`.
+        student_name: The student name used for the query (defaulted by the
+            tool when the LLM omits it).
 
     Returns:
-        Dict with progress fields, or a dict with "error" key on failure.
+        A new dict — the input is not mutated. Keys ``student_name``,
+        ``error`` and ``narration_hint`` are guaranteed to be present when
+        ``data_available`` is ``False``.
     """
-    graphiti_uri = os.environ.get("GRAPHITI_URI", _DEFAULT_GRAPHITI_URI)
-    group_id = os.environ.get("GRAPHITI_GROUP_ID", _DEFAULT_GROUP_ID)
+    if progress.get("data_available", False):
+        return progress
 
-    try:
-        # TODO: Wire the actual Graphiti client here.
-        #
-        # The pattern is:
-        #   from graphiti_core import Graphiti
-        #   client = Graphiti(graphiti_uri, ...)
-        #   nodes = await client.search(
-        #       query=f"{student_name} study progress",
-        #       group_ids=[group_id],
-        #       num_results=10,
-        #   )
-        #
-        # Then extract and structure the progress data from the returned
-        # nodes/edges. The student model schema includes:
-        #   - Topic confidence scores (per text, per AO)
-        #   - XP total and recent session XP
-        #   - Current level (from the 15-level progression)
-        #   - Streak count (consecutive study days)
-        #   - Achievement progress (unlocked + near-unlockable)
-        #   - Session history (recent sessions, duration, topics)
-        #
-        # For the hackathon demo, a subset is sufficient:
-        #   streak_days, level_name, recent_xp, near_achievements
-
-        logger.warning(
-            "query_student_model: Graphiti client not yet wired — "
-            "returning placeholder data for %s",
-            student_name,
-        )
-
-        # Placeholder until Graphiti is wired
-        return {
-            "student_name": student_name,
-            "streak_days": 0,
-            "level_name": "Unknown",
-            "recent_xp": 0,
-            "near_achievements": [],
-            "topic_confidence": {},
-            "data_available": False,
-        }
-
-    except Exception as exc:
-        logger.exception("Failed to query student model for %s", student_name)
-        return {
-            "error": str(exc),
-            "student_name": student_name,
-            "data_available": False,
-        }
+    augmented: dict[str, Any] = dict(progress)
+    augmented.setdefault("student_name", student_name)
+    augmented.setdefault("error", "graphiti unavailable")
+    augmented["narration_hint"] = _NARRATION_HINT_NO_DATA
+    augmented["data_available"] = False
+    return augmented
 
 
 # ---------------------------------------------------------------------------
 # Pollen core_tools.Tool subclass
 # ---------------------------------------------------------------------------
 #
-# This try/except allows the module to be tested standalone without the
-# Pollen SDK installed. When running inside reachy_mini_conversation_app,
-# the import succeeds and the class is registered as a custom tool.
+# Pollen's SDK is not available outside the Reachy daemon's Python
+# environment. To keep the module importable for unit tests and editable
+# installs (per AC: ``python -c "from ... import QueryStudentModelTool"``
+# must succeed), we fall back to a no-op base class when the import fails.
 
 try:
-    from reachy_mini_conversation_app.tools.core_tools import Tool
-
-    class QueryStudentModelTool(Tool):
-        """Look up a student's current study progress from the knowledge graph.
-
-        Call this whenever someone asks how revision is going, what
-        achievements are close to being unlocked, or what topic to study next.
-        """
-
-        name = "query_student_model"
-        description = (
-            "Look up the student's current study progress: streak, level, "
-            "recent XP, topic confidence, nearest unlockable achievements. "
-            "Call this whenever someone asks how revision is going or what "
-            "to study next."
-        )
-
-        async def run(self, args: dict, deps: Any) -> dict[str, Any]:
-            """Execute the student model query.
-
-            Args:
-                args: Tool call arguments from Gemini Live.
-                    Optional key: "student_name" (default from env).
-                deps: Pollen dependency injection container (provides
-                    daemon connection, etc. — not used by this tool).
-
-            Returns:
-                Dict with student progress fields for Gemini to narrate.
-            """
-            student_name = args.get(
-                "student_name",
-                os.environ.get("STUDENT_NAME", _DEFAULT_STUDENT_NAME),
-            )
-            return await _fetch_student_progress(student_name)
-
-except ImportError:
-    # Running outside reachy_mini_conversation_app (e.g. standalone test)
-    logger.debug(
-        "reachy_mini_conversation_app not installed — "
-        "QueryStudentModelTool not registered"
+    from reachy_mini_conversation_app.tools.core_tools import (  # type: ignore[import-not-found]
+        Tool as _PollenTool,
     )
+except ImportError:  # pragma: no cover — exercised only in non-Pollen envs
+    logger.debug(
+        "reachy_mini_conversation_app not installed — using fallback Tool base"
+    )
+
+    class _PollenTool:  # type: ignore[no-redef]
+        """Minimal stand-in so the tool class is importable standalone."""
+
+        name: str = ""
+        description: str = ""
+        parameters: dict[str, Any] = {}
+
+
+class QueryStudentModelTool(_PollenTool):  # type: ignore[misc]
+    """Look up a student's current study progress from the knowledge graph.
+
+    Call this whenever someone asks how revision is going, what
+    achievements are close to being unlocked, or what topic to study next.
+    The progress dict is read live from Graphiti via
+    :class:`common.graphiti_client.GraphitiClient`.
+    """
+
+    name = "query_student_model"
+    description = (
+        "Look up the student's current study progress: streak, level, "
+        "recent XP, topic confidence, nearest unlockable achievements. "
+        "Call this whenever someone asks how revision is going or what "
+        "to study next."
+    )
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "subject": {
+                "type": "string",
+                "description": (
+                    "Subject domain to scope the progress narrative around — "
+                    "for the Scholar profile this is typically 'english'."
+                ),
+                "default": DEFAULT_SUBJECT,
+            },
+            "student_name": {
+                "type": "string",
+                "description": (
+                    "Identifier of the student in the Graphiti graph "
+                    "(without the 'student-' prefix). Defaults to 'lilymay'."
+                ),
+                "default": DEFAULT_STUDENT_NAME,
+            },
+        },
+        "required": [],
+    }
+
+    async def run(
+        self,
+        subject: str = DEFAULT_SUBJECT,
+        student_name: str = DEFAULT_STUDENT_NAME,
+    ) -> dict[str, Any]:
+        """Execute the student model query.
+
+        Constructs a fresh :class:`GraphitiClient` per call (mirrors the
+        connect-per-call pattern in ``common.graphiti_client``) with the
+        per-student ``group_id`` ``f"student-{student_name}"``.
+
+        Args:
+            subject: Subject domain narrative is being shaped for. Defaults
+                to ``"english"``.
+            student_name: Student identifier without the ``student-``
+                prefix. Defaults to ``"lilymay"``.
+
+        Returns:
+            Dict from
+            :meth:`GraphitiClient.search_student_progress`. When
+            ``data_available`` is ``False`` the dict is augmented with a
+            ``narration_hint`` field instructing the LLM to acknowledge
+            missing data — Scholar must never crash the conversation
+            (scope §5.2 #2).
+        """
+        client = GraphitiClient(default_group_ids=[f"student-{student_name}"])
+        try:
+            progress = await client.search_student_progress(student_name, subject)
+        except Exception as exc:  # noqa: BLE001 — must never bubble out of tool
+            logger.exception(
+                "QueryStudentModelTool.run unexpected failure for %s/%s",
+                student_name,
+                subject,
+            )
+            return _ensure_narration_friendly(
+                {
+                    "data_available": False,
+                    "error": f"unexpected: {exc}",
+                },
+                student_name,
+            )
+
+        if not isinstance(progress, dict):
+            logger.warning(
+                "QueryStudentModelTool.run got non-dict from GraphitiClient: %r",
+                progress,
+            )
+            return _ensure_narration_friendly(
+                {"data_available": False, "error": "malformed progress payload"},
+                student_name,
+            )
+
+        return _ensure_narration_friendly(progress, student_name)
+
+
+__all__ = [
+    "DEFAULT_STUDENT_NAME",
+    "DEFAULT_SUBJECT",
+    "QueryStudentModelTool",
+]

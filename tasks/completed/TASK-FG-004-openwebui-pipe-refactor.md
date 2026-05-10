@@ -10,7 +10,7 @@ complexity: 4
 estimated_minutes: 60
 dependencies: [TASK-FG-002]
 domain_tags: [openwebui, pipe-function, integration]
-status: pending
+status: completed
 consumer_context:
   - task: TASK-FG-002
     consumes: JarvisClient API
