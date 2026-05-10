@@ -1,6 +1,7 @@
 # FEAT-FG-001 E2E Runbooks — Authoring Bundle
 
-**Parent review:** [TASK-REV-3078](../TASK-REV-3078-design-e2e-test-runbook-for-feat-fg-001.md)
+**Status:** ✅ Shipped (2026-05-10) — all three authoring tasks complete; runbooks live under [`docs/runbooks/`](../../../docs/runbooks/). Bundle moved here from `tasks/backlog/feat-fg-001-e2e-runbooks/` on completion. The next surface is the strategy-§10.2 first-execution tasks (one per runbook) — author them when ready to drive the runs.
+**Parent review:** [TASK-REV-3078](../../backlog/TASK-REV-3078-design-e2e-test-runbook-for-feat-fg-001.md)
 **Strategy doc:** [`docs/FEAT-FG-001-e2e-test-strategy.md`](../../../docs/FEAT-FG-001-e2e-test-strategy.md)
 **Feature:** FEAT-FG-001 (Fleet Gateway Common + Gateway Interfaces)
 
@@ -14,9 +15,9 @@ The strategy doc is the source of truth for *what* goes in each runbook (phase t
 
 | ID | Title | Wave | Mode | Output |
 |---|---|---|---|---|
-| [TASK-FG-007](TASK-FG-007-author-scholar-e2e-runbook.md) | Author RUNBOOK-fleet-gateway-scholar-e2e.md | 1 | direct | `docs/runbooks/RUNBOOK-fleet-gateway-scholar-e2e.md` |
-| [TASK-FG-008](TASK-FG-008-author-bridge-e2e-runbook.md) | Author RUNBOOK-fleet-gateway-bridge-e2e.md | 2 | direct | `docs/runbooks/RUNBOOK-fleet-gateway-bridge-e2e.md` |
-| [TASK-FG-009](TASK-FG-009-author-openwebui-e2e-runbook.md) | Author RUNBOOK-fleet-gateway-openwebui-e2e.md | 2 | direct | `docs/runbooks/RUNBOOK-fleet-gateway-openwebui-e2e.md` |
+| [TASK-FG-007](../TASK-FG-007-author-scholar-e2e-runbook.md) | Author RUNBOOK-fleet-gateway-scholar-e2e.md | 1 | direct | [`docs/runbooks/RUNBOOK-fleet-gateway-scholar-e2e.md`](../../../docs/runbooks/RUNBOOK-fleet-gateway-scholar-e2e.md) |
+| [TASK-FG-008](../TASK-FG-008-author-bridge-e2e-runbook.md) | Author RUNBOOK-fleet-gateway-bridge-e2e.md | 2 | direct | [`docs/runbooks/RUNBOOK-fleet-gateway-bridge-e2e.md`](../../../docs/runbooks/RUNBOOK-fleet-gateway-bridge-e2e.md) |
+| [TASK-FG-009](../TASK-FG-009-author-openwebui-e2e-runbook.md) | Author RUNBOOK-fleet-gateway-openwebui-e2e.md | 2 | direct | [`docs/runbooks/RUNBOOK-fleet-gateway-openwebui-e2e.md`](../../../docs/runbooks/RUNBOOK-fleet-gateway-openwebui-e2e.md) |
 
 **Wave 1** ships the Scholar runbook first; it establishes the shape (header → known-issues block → numbered phases with verbatim bash and `Pass:` lines → RESULTS-write phase) that **Wave 2** (Bridge + OpenWebUI, parallel-safe — no file conflicts) mirrors. Sequencing is for shape consistency; not a hard technical dependency.
 
