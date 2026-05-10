@@ -216,3 +216,17 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# GuardKit runtime state (autobuild telemetry, BDD reports, worktrees, archives)
+# These are per-run artefacts written by `guardkit autobuild`; not source.
+.guardkit/autobuild/
+.guardkit/bdd/
+.guardkit/worktrees/
+.guardkit/archive/
+.guardkit/bootstrap_state.json
+.guardkit/graphiti-query-log.jsonl
+.guardkit-git.lock
+
+# Claude Code orchestrator scratch (plan markdown, review reports — generated per task)
+.claude/task-plans/
+.claude/reviews/
