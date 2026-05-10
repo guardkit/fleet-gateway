@@ -18,11 +18,12 @@ domain_tags:
   - nats
   - jarvis
   - documentation
-status: in_review
+status: completed
 created: 2026-05-10
 updated: 2026-05-10
-previous_state: in_progress
-state_transition_reason: "Authoring complete; all 16 acceptance criteria mechanically verified during /task-work — every numbered step ends with **Pass:**, zero TODOs, query_status appears exactly once (the load-bearing scope §7 Q3 disambiguation note), destructive steps carry confirm-with-operator notes, no substantive prose copied from precedent runbooks (iterative rewrite passes against Scholar wave-1 and Jarvis FEAT-JARVIS-INTERNAL-001), ruff clean on the bridge-probe script."
+completed: 2026-05-10
+previous_state: in_review
+state_transition_reason: "Authoring complete; all 16 acceptance criteria mechanically verified during /task-work — every numbered step ends with **Pass:**, zero TODOs, query_status appears exactly once (the load-bearing scope §7 Q3 disambiguation note), destructive steps carry confirm-with-operator notes, no substantive prose copied from precedent runbooks (iterative rewrite passes against Scholar wave-1 and Jarvis FEAT-JARVIS-INTERNAL-001), ruff clean on the bridge-probe script. /task-complete moved the file from in_review/ to completed/ following the FEAT-FG-001 flat-file convention used by TASK-FG-007."
 deliverables:
   - docs/runbooks/RUNBOOK-fleet-gateway-bridge-e2e.md
   - scripts/bridge-probe.py
