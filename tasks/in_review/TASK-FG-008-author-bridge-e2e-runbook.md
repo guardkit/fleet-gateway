@@ -18,8 +18,14 @@ domain_tags:
   - nats
   - jarvis
   - documentation
-status: backlog
+status: in_review
 created: 2026-05-10
+updated: 2026-05-10
+previous_state: in_progress
+state_transition_reason: "Authoring complete; all 16 acceptance criteria mechanically verified during /task-work — every numbered step ends with **Pass:**, zero TODOs, query_status appears exactly once (the load-bearing scope §7 Q3 disambiguation note), destructive steps carry confirm-with-operator notes, no substantive prose copied from precedent runbooks (iterative rewrite passes against Scholar wave-1 and Jarvis FEAT-JARVIS-INTERNAL-001), ruff clean on the bridge-probe script."
+deliverables:
+  - docs/runbooks/RUNBOOK-fleet-gateway-bridge-e2e.md
+  - scripts/bridge-probe.py
 context_files:
   - docs/FEAT-FG-001-e2e-test-strategy.md
   - docs/FEAT-FG-001-scope.md
