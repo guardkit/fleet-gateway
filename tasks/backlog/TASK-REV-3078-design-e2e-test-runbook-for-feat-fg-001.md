@@ -3,11 +3,21 @@ id: TASK-REV-3078
 title: "Design e2e test runbook for FEAT-FG-001"
 task_type: review
 priority: high
-status: backlog
+status: review_complete
 feature_id: FEAT-FG-001
 mode: decision
 depth: standard
 created: 2026-05-10
+review_results:
+  mode: decision
+  depth: standard
+  decision: three-thin-per-gateway-runbooks
+  strategy_doc: docs/FEAT-FG-001-e2e-test-strategy.md
+  report_path: .claude/reviews/TASK-REV-3078-review-report.md
+  operator_priority: quality-over-deadline
+  recommendations_count: 5
+  next_step: spawn three runbook-authoring tasks (see strategy §10.2)
+  completed_at: 2026-05-10
 tags:
   - e2e
   - testing
