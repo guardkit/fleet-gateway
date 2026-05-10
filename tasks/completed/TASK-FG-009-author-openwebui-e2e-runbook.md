@@ -18,8 +18,14 @@ domain_tags:
   - nats
   - jarvis
   - documentation
-status: backlog
+status: completed
 created: 2026-05-10
+updated: 2026-05-10
+completed: 2026-05-10
+previous_state: in_review
+state_transition_reason: "Authoring complete; all 16 acceptance criteria mechanically verified during /task-work (28/28 numbered sub-steps end with **Pass:**; Phase 0 covers all six dependencies including the load-bearing nats-py-in-container check with explicit install/rebuild path; HUMAN markers + screenshot evidence paths on Phases 1 and 3; Phase 2 explicitly orders side-terminal subscribe before Phase 3; Phase 4 correlation_id grep + envelope cross-check; Phase 5 documents both raw-text and history-wrapped envelope shapes per strategy §6.3 deliberate openness; Phase 6 enumerates all four preserved error strings from nats_fleet_pipe.deploy.py; destructive steps carry confirm-with-user notes; zero 8-word verbatim overlap with the Wave-1 Scholar runbook — Python-driven precedent-overlap scan returned 0 matches after two rewrite passes)."
+deliverables:
+  - docs/runbooks/RUNBOOK-fleet-gateway-openwebui-e2e.md
 context_files:
   - docs/FEAT-FG-001-e2e-test-strategy.md
   - docs/FEAT-FG-001-scope.md
