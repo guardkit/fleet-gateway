@@ -1,3 +1,4 @@
+ask_jarvis
 agent_status
 camera
 emotion
