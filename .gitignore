@@ -230,3 +230,10 @@ __marimo__/
 # Claude Code orchestrator scratch (plan markdown, review reports — generated per task)
 .claude/task-plans/
 .claude/reviews/
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
