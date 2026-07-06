@@ -122,7 +122,7 @@ class QueryStudentModelTool(_PollenTool):  # type: ignore[misc]
         "Call this whenever someone asks how revision is going or what "
         "to study next."
     )
-    parameters: dict[str, Any] = {
+    parameters_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
             "subject": {
@@ -145,11 +145,7 @@ class QueryStudentModelTool(_PollenTool):  # type: ignore[misc]
         "required": [],
     }
 
-    async def run(
-        self,
-        subject: str = DEFAULT_SUBJECT,
-        student_name: str = DEFAULT_STUDENT_NAME,
-    ) -> dict[str, Any]:
+    async def __call__(self, deps: Any = None, **kwargs: Any) -> dict[str, Any]:
         """Execute the student model query.
 
         Constructs a fresh :class:`GraphitiClient` per call (mirrors the
@@ -157,10 +153,9 @@ class QueryStudentModelTool(_PollenTool):  # type: ignore[misc]
         per-student ``group_id`` ``f"student-{student_name}"``.
 
         Args:
-            subject: Subject domain narrative is being shaped for. Defaults
-                to ``"english"``.
-            student_name: Student identifier without the ``student-``
-                prefix. Defaults to ``"lilymay"``.
+            deps: ToolDependencies (unused, required by Pollen interface).
+            **kwargs: Optional 'subject' and 'student_name' keys; both
+                default per the module constants.
 
         Returns:
             Dict from
@@ -170,12 +165,14 @@ class QueryStudentModelTool(_PollenTool):  # type: ignore[misc]
             missing data — Scholar must never crash the conversation
             (scope §5.2 #2).
         """
+        subject: str = kwargs.get("subject", DEFAULT_SUBJECT)
+        student_name: str = kwargs.get("student_name", DEFAULT_STUDENT_NAME)
         client = GraphitiClient(default_group_ids=[f"student-{student_name}"])
         try:
             progress = await client.search_student_progress(student_name, subject)
         except Exception as exc:  # noqa: BLE001 — must never bubble out of tool
             logger.exception(
-                "QueryStudentModelTool.run unexpected failure for %s/%s",
+                "QueryStudentModelTool unexpected failure for %s/%s",
                 student_name,
                 subject,
             )
@@ -189,7 +186,7 @@ class QueryStudentModelTool(_PollenTool):  # type: ignore[misc]
 
         if not isinstance(progress, dict):
             logger.warning(
-                "QueryStudentModelTool.run got non-dict from GraphitiClient: %r",
+                "QueryStudentModelTool got non-dict from GraphitiClient: %r",
                 progress,
             )
             return _ensure_narration_friendly(
