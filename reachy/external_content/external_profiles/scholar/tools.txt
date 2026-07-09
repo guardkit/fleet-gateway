@@ -1,7 +1,9 @@
 ask_jarvis
+ask_tutor
 query_student_model
 celebrate_achievement
 camera
-emotion
 dance
 head_tracking
+task_cancel
+task_status

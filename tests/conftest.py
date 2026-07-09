@@ -8,8 +8,12 @@ fixtures with mutable state.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
+
+import httpx
+import pytest
 
 
 @dataclass
@@ -48,3 +52,43 @@ def make_result_envelope(**overrides: Any) -> dict[str, Any]:
 def make_result_bytes(**overrides: Any) -> bytes:
     """Serialise :func:`make_result_envelope` to UTF-8 JSON bytes."""
     return json.dumps(make_result_envelope(**overrides)).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# study-tutor :8100 HTTP seam — inject an httpx.MockTransport into the
+# connect-per-call TutorClient so seam tests never touch the network.
+# ---------------------------------------------------------------------------
+
+Handler = Callable[[httpx.Request], httpx.Response]
+
+
+def install_mock_transport(monkeypatch: pytest.MonkeyPatch, handler: Handler) -> None:
+    """Route ``TutorClient``'s ``httpx.AsyncClient`` through a MockTransport.
+
+    :class:`common.tutor_client.TutorClient` opens a fresh
+    :class:`httpx.AsyncClient` per call (connect-per-call). This wraps that
+    constructor so every client built inside the module is handed a
+    :class:`httpx.MockTransport` around ``handler`` — ``base_url``, bearer
+    headers and timeout are preserved, only the socket is replaced.
+
+    Args:
+        monkeypatch: The active monkeypatch fixture (auto-restores).
+        handler: A ``(httpx.Request) -> httpx.Response`` callable. It may
+            raise :class:`httpx.HTTPError` subclasses to simulate transport
+            failures.
+    """
+    # tutor_client uses ``import httpx; httpx.AsyncClient(...)`` — the same
+    # module object as here — so patching the global attribute reaches it.
+    # Unwrap first so repeated installs in one test don't nest wrappers (a
+    # nested factory would overwrite the inner transport).
+    current = httpx.AsyncClient
+    real_async_client = cast(
+        "type[httpx.AsyncClient]", getattr(current, "_real_async_client", current)
+    )
+
+    def factory(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_async_client(*args, **kwargs)
+
+    factory._real_async_client = real_async_client  # type: ignore[attr-defined]
+    monkeypatch.setattr(httpx, "AsyncClient", factory)

@@ -1,252 +1,132 @@
 """Tests for ``reachy.external_content.external_tools.query_student_model``.
 
-All tests mock ``common.graphiti_client.GraphitiClient`` — no real FalkorDB
-required (TASK-FG-005 AC). The seam test that verifies the
-producer/consumer contract for ``GraphitiClient.search_student_progress``
-is also defined here, marked with ``seam`` and ``integration_contract``.
+Post-migration (FEAT-VOICE-004 R04 + R05): the tool conforms to the Pollen
+``core_tools.Tool`` ABC (``parameters_schema`` + async ``__call__``, dict
+return) and reads the durable learning record via the study-tutor ``:8100``
+adapter — **not** the frozen Graphiti graph. Network is replaced by an
+``httpx.MockTransport`` (see ``conftest``); no real adapter required.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import inspect
 from typing import Any
-from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 
+from common.tutor_client import STUDENT_MODEL_PATH
 from reachy.external_content.external_tools import query_student_model as qsm_mod
 from reachy.external_content.external_tools.query_student_model import (
     DEFAULT_STUDENT_NAME,
     DEFAULT_SUBJECT,
     QueryStudentModelTool,
 )
+from tests.conftest import install_mock_transport
+from tests.test_tutor_client import make_tutor_handler
 
-# ---------------------------------------------------------------------------
-# Mock data classes + factory functions (factory pattern per .claude/rules)
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class MockProgress:
-    """In-memory mock of a ``GraphitiClient.search_student_progress`` reply."""
-
-    student_name: str = "lilymay"
-    streak_days: int = 5
-    level_name: str = "Knight"
-    recent_xp: int = 240
-    near_achievements: list[str] = field(default_factory=lambda: ["7-day streak"])
-    topic_confidence: dict[str, float] = field(
-        default_factory=lambda: {"reading": 0.7, "writing": 0.55}
-    )
-    data_available: bool = True
-
-
-def make_progress(**overrides: Any) -> dict[str, Any]:
-    """Build a happy-path progress dict with sensible defaults."""
-    defaults: dict[str, Any] = {
-        "student_name": "lilymay",
-        "streak_days": 5,
-        "level_name": "Knight",
-        "recent_xp": 240,
-        "near_achievements": ["7-day streak"],
-        "topic_confidence": {"reading": 0.7, "writing": 0.55},
-        "data_available": True,
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-def make_unreachable_progress(**overrides: Any) -> dict[str, Any]:
-    """Build a degraded progress dict matching ``GraphitiClient`` contract."""
-    defaults: dict[str, Any] = {
-        "data_available": False,
-        "error": "unreachable: connection refused",
-    }
-    defaults.update(overrides)
-    return defaults
-
-
-@dataclass
-class MockGraphitiClient:
-    """Stand-in for :class:`common.graphiti_client.GraphitiClient`.
-
-    Records constructor kwargs and method invocations so tests can assert
-    on the group_id construction and the args forwarded to
-    ``search_student_progress`` without touching FalkorDB.
-    """
-
-    init_kwargs: dict[str, Any] = field(default_factory=dict)
-    progress: dict[str, Any] = field(default_factory=make_progress)
-    raise_on_call: BaseException | None = None
-    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = field(default_factory=list)
-
-    async def search_student_progress(
-        self, *args: Any, **kwargs: Any
-    ) -> dict[str, Any]:
-        self.calls.append((args, kwargs))
-        if self.raise_on_call is not None:
-            raise self.raise_on_call
-        return self.progress
-
-
-def make_mock_client(**overrides: Any) -> MockGraphitiClient:
-    """Build a :class:`MockGraphitiClient` with sensible defaults."""
-    defaults: dict[str, Any] = {
-        "progress": make_progress(),
-        "raise_on_call": None,
-    }
-    defaults.update(overrides)
-    return MockGraphitiClient(**defaults)
-
-
-def install_client_factory(
-    monkeypatch: pytest.MonkeyPatch, mock_client: MockGraphitiClient
-) -> list[dict[str, Any]]:
-    """Patch ``GraphitiClient`` to return ``mock_client`` and capture init kwargs.
-
-    Returns a list that will be appended to once per construction with the
-    keyword arguments the tool used. Tests assert on this to verify the
-    ``default_group_ids`` group_id construction.
-    """
-    captured: list[dict[str, Any]] = []
-
-    def factory(*args: Any, **kwargs: Any) -> MockGraphitiClient:
-        captured.append(kwargs)
-        mock_client.init_kwargs = kwargs
-        return mock_client
-
-    monkeypatch.setattr(qsm_mod, "GraphitiClient", factory)
-    return captured
+HAPPY_RECORD = {
+    "student_name": "lilymay",
+    "streak_days": 5,
+    "level_name": "Knight",
+    "recent_xp": 240,
+    "near_achievements": ["7-day streak"],
+    "topic_confidence": {"reading": 0.7, "writing": 0.55},
+    "data_available": True,
+}
 
 
 # ---------------------------------------------------------------------------
-# Happy path
+# Happy path — reads the durable record via :8100
 # ---------------------------------------------------------------------------
 
 
-async def test_run_happy_path_returns_progress_dict(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Happy path: GraphitiClient returns data, tool returns it unchanged."""
-    mock_client = make_mock_client()
-    install_client_factory(monkeypatch, mock_client)
+async def test_happy_path_returns_progress_dict(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_mock_transport(monkeypatch, make_tutor_handler(student_body=HAPPY_RECORD))
 
     tool = QueryStudentModelTool()
-    result = await tool.run(subject="english", student_name="lilymay")
+    result = await tool(subject="english", student_name="lilymay")
 
     assert result["data_available"] is True
     assert result["streak_days"] == 5
     assert result["level_name"] == "Knight"
     assert result["recent_xp"] == 240
-    assert result["near_achievements"] == ["7-day streak"]
-    assert "narration_hint" not in result, (
-        "happy path must not inject narration_hint"
+    assert "narration_hint" not in result, "happy path must not inject narration_hint"
+
+
+async def test_forwards_subject_and_student_as_query_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record: list[httpx.Request] = []
+    install_mock_transport(
+        monkeypatch, make_tutor_handler(record=record, student_body=HAPPY_RECORD)
     )
 
-
-async def test_run_forwards_subject_and_student_to_client(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The tool forwards both kwargs to ``search_student_progress``."""
-    mock_client = make_mock_client()
-    install_client_factory(monkeypatch, mock_client)
-
     tool = QueryStudentModelTool()
-    await tool.run(subject="literature", student_name="alice")
+    await tool(subject="literature", student_name="alice")
 
-    assert len(mock_client.calls) == 1
-    args, kwargs = mock_client.calls[0]
-    forwarded = list(args) + list(kwargs.values())
-    assert "alice" in forwarded
-    assert "literature" in forwarded
+    req = record[0]
+    assert req.method == "GET"
+    assert req.url.path == STUDENT_MODEL_PATH
+    params = dict(req.url.params)
+    assert params["subject"] == "literature"
+    assert params["student_name"] == "alice"
 
 
 # ---------------------------------------------------------------------------
-# Unreachable / degraded path — must never crash, must add narration hint
+# Degraded / unavailable — must never crash, must add narration hint
 # ---------------------------------------------------------------------------
 
 
-async def test_run_when_graphiti_unreachable_returns_narration_hint(
+async def test_when_tutor_unavailable_returns_narration_hint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Per scope §5.2 #2 — unreachable Graphiti must not crash conversation."""
-    mock_client = make_mock_client(progress=make_unreachable_progress())
-    install_client_factory(monkeypatch, mock_client)
+    """A non-2xx read (incl. the pending endpoint's 404) degrades gracefully."""
+    install_mock_transport(monkeypatch, make_tutor_handler(student_status=503))
 
     tool = QueryStudentModelTool()
-    result = await tool.run(subject="english", student_name="lilymay")
+    result = await tool(subject="english", student_name="lilymay")
 
     assert result["data_available"] is False
-    assert "error" in result and result["error"]
-    assert "narration_hint" in result and result["narration_hint"]
-    # Narration hint must instruct LLM to acknowledge missing data
+    assert result["error"]
+    assert result["narration_hint"]
     hint = result["narration_hint"].lower()
     assert "no" in hint or "data" in hint
     assert result["student_name"] == "lilymay"
 
 
-async def test_run_when_client_raises_unexpected_returns_degraded(
+async def test_when_client_raises_unexpected_returns_degraded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Even an unexpected exception must not bubble out of the tool."""
-    mock_client = make_mock_client(raise_on_call=RuntimeError("boom"))
-    install_client_factory(monkeypatch, mock_client)
+    """An unexpected (non-TutorUnavailable) error must not bubble out."""
+
+    async def boom(self: Any, *a: Any, **k: Any) -> dict[str, Any]:
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr("common.tutor_client.TutorClient.get_student_model", boom)
 
     tool = QueryStudentModelTool()
-    result = await tool.run(subject="english", student_name="lilymay")
+    result = await tool(subject="english", student_name="lilymay")
 
     assert result["data_available"] is False
     assert "error" in result
     assert "narration_hint" in result
 
 
-async def test_run_when_client_returns_non_dict_returns_degraded(
+async def test_when_client_returns_non_dict_returns_degraded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A malformed (non-dict) progress payload is degraded gracefully."""
-    mock_client = make_mock_client()
-    mock_client.progress = "not a dict"  # type: ignore[assignment]
-    install_client_factory(monkeypatch, mock_client)
+    async def not_a_dict(self: Any, *a: Any, **k: Any) -> Any:
+        return "not a dict"
+
+    monkeypatch.setattr("common.tutor_client.TutorClient.get_student_model", not_a_dict)
 
     tool = QueryStudentModelTool()
-    result = await tool.run(subject="english", student_name="lilymay")
+    result = await tool(subject="english", student_name="lilymay")
 
     assert result["data_available"] is False
     assert "error" in result
     assert "narration_hint" in result
-
-
-# ---------------------------------------------------------------------------
-# group_id construction — must be the dash form per scope §6 A6
-# ---------------------------------------------------------------------------
-
-
-async def test_run_constructs_group_id_with_dash_prefix(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """default_group_ids must be ``[f"student-{student_name}"]`` (dash form)."""
-    mock_client = make_mock_client()
-    captured = install_client_factory(monkeypatch, mock_client)
-
-    tool = QueryStudentModelTool()
-    await tool.run(subject="english", student_name="lilymay")
-
-    assert len(captured) == 1
-    init_kwargs = captured[0]
-    assert init_kwargs["default_group_ids"] == ["student-lilymay"]
-
-
-async def test_run_group_id_uses_supplied_student_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Different student names produce different group_ids."""
-    mock_client = make_mock_client()
-    captured = install_client_factory(monkeypatch, mock_client)
-
-    tool = QueryStudentModelTool()
-    await tool.run(subject="english", student_name="alice")
-
-    assert captured[0]["default_group_ids"] == ["student-alice"]
 
 
 # ---------------------------------------------------------------------------
@@ -254,68 +134,77 @@ async def test_run_group_id_uses_supplied_student_name(
 # ---------------------------------------------------------------------------
 
 
-async def test_run_defaults_subject_and_student_name(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Calling ``run()`` with no kwargs uses the documented defaults."""
-    mock_client = make_mock_client()
-    captured = install_client_factory(monkeypatch, mock_client)
+async def test_defaults_subject_and_student_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    record: list[httpx.Request] = []
+    install_mock_transport(
+        monkeypatch, make_tutor_handler(record=record, student_body=HAPPY_RECORD)
+    )
 
     tool = QueryStudentModelTool()
-    await tool.run()
+    await tool()
 
     assert DEFAULT_STUDENT_NAME == "lilymay"
     assert DEFAULT_SUBJECT == "english"
-    assert captured[0]["default_group_ids"] == [f"student-{DEFAULT_STUDENT_NAME}"]
-    assert mock_client.calls, "client must have been invoked"
-
-
-def test_tool_metadata_matches_acceptance_criteria() -> None:
-    """Tool name / description / parameter schema match the AC."""
-    tool = QueryStudentModelTool()
-    assert tool.name == "query_student_model"
-    assert tool.description and "progress" in tool.description.lower()
-    schema = tool.parameters
-    assert schema["type"] == "object"
-    properties = schema["properties"]
-    assert "subject" in properties
-    assert "student_name" in properties
-    assert properties["student_name"]["default"] == "lilymay"
+    params = dict(record[0].url.params)
+    assert params["subject"] == "english"
+    assert params["student_name"] == "lilymay"
 
 
 # ---------------------------------------------------------------------------
-# Seam test — pinned to the contract version of the GraphitiClient
-# (mirrors the canonical seam test in TASK-FG-005 spec).
+# ABC conformance (R04) + the negative that the rejected shape is gone
+# ---------------------------------------------------------------------------
+
+
+def test_tool_conforms_to_pollen_abc() -> None:
+    """AC-R04-1/2/4: parameters_schema + async __call__ + dict return; no run/parameters."""
+    tool = QueryStudentModelTool()
+    assert hasattr(tool, "parameters_schema"), "must expose parameters_schema"
+    assert not hasattr(tool, "parameters"), "must not use rejected 'parameters' field"
+    assert callable(getattr(tool, "__call__", None)), "must implement __call__"
+    assert not hasattr(tool, "run"), "must not use the rejected 'run' method"
+    assert inspect.iscoroutinefunction(tool.__call__), "__call__ must be async"
+
+    schema = tool.parameters_schema
+    assert schema["type"] == "object"
+    assert "subject" in schema["properties"]
+    assert "student_name" in schema["properties"]
+    assert schema["properties"]["student_name"]["default"] == "lilymay"
+
+
+# ---------------------------------------------------------------------------
+# Seam test — R05: reads via :8100, never from Graphiti
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.seam
-@pytest.mark.integration_contract("GraphitiClient.search_student_progress")
-async def test_query_student_model_consumes_progress_dict() -> None:
-    """Seam: Scholar tool consumes the contract-bound progress dict.
+@pytest.mark.integration_contract("STUDY_TUTOR_HTTP_8100")
+async def test_query_student_model_reads_via_8100_not_graphiti(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The read targets the :8100 adapter with a bearer; no Graphiti path remains.
 
-    Contract: dict with keys ``student_name``, ``streak_days``, ``level_name``,
-    ``recent_xp``, ``near_achievements``, ``topic_confidence``,
-    ``data_available``. Producer: TASK-FG-003.
+    Contract: HTTP GET against the study-tutor adapter on :8100 (bearer).
+    Producer: TASK-APP-001 (HTTP adapter).
     """
-    with patch(
-        "common.graphiti_client.GraphitiClient.search_student_progress",
-        new_callable=AsyncMock,
-    ) as mock_progress:
-        mock_progress.return_value = {
-            "student_name": "lilymay",
-            "streak_days": 5,
-            "level_name": "Knight",
-            "recent_xp": 240,
-            "near_achievements": ["7-day streak"],
-            "topic_confidence": {"reading": 0.7},
-            "data_available": True,
-        }
+    # The frozen graph is gone from the tool's data plane entirely — no import
+    # of the graphiti client module and no client construction remain. (Prose
+    # in the docstring may still explain the migration away from it.)
+    assert not hasattr(qsm_mod, "GraphitiClient"), "Graphiti read path must be removed"
+    src = inspect.getsource(qsm_mod)
+    assert "graphiti_client" not in src, "no residual graphiti_client import"
+    assert "GraphitiClient" not in src, "no residual GraphitiClient construction"
 
-        tool = QueryStudentModelTool()
-        result = await tool.run(subject="english", student_name="lilymay")
+    monkeypatch.setenv("STUDY_TUTOR_TOKEN", "token-lilymay")
+    record: list[httpx.Request] = []
+    install_mock_transport(
+        monkeypatch, make_tutor_handler(record=record, student_body=HAPPY_RECORD)
+    )
 
-        mock_progress.assert_called_once()
-        assert isinstance(result, dict), "tool must return a dict"
-        assert result.get("data_available") is True
-        assert result.get("streak_days") == 5
+    tool = QueryStudentModelTool()
+    result = await tool(subject="english", student_name="lilymay")
+
+    assert isinstance(result, dict), "tool must return a dict"
+    assert result["data_available"] is True
+    req = record[0]
+    assert req.url.path == STUDENT_MODEL_PATH
+    assert req.headers["authorization"] == "Bearer token-lilymay"

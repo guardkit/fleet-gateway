@@ -1,27 +1,26 @@
-"""Scholar's student model query tool — reads from Graphiti.
+"""Scholar's student model query tool — reads the durable learning record.
 
 Subclasses ``core_tools.Tool`` from ``reachy_mini_conversation_app`` to
-provide the Scholar profile with access to the shared Graphiti student
-model. The study-tutor writes session data (topic confidence, XP, streaks,
-achievements) during tutoring sessions; this tool reads it.
+provide the Scholar profile with the student's current study progress. The
+study-tutor writes session data (topic confidence, XP, streaks,
+achievements) during tutoring sessions; this tool reads it back.
 
-The tool returns a plain dict which Gemini Live narrates in character per
-the Scholar persona in ``instructions.txt``.
+**Data plane (recon D2 / FEAT-VOICE-004 R05).** The read now goes to the
+durable Postgres-backed store **via the study-tutor HTTP adapter on
+``:8100``** — the same surface :mod:`ask_tutor` uses — replacing the read of
+the frozen Graphiti graph (``student-lilymay``), whose write path is being
+torn down. ``student_id`` is derived server-side from the bearer token.
 
-Contract (TASK-FG-003 + scope §6 A6):
+The tool returns a plain dict which the Realtime session narrates in
+character per the Scholar persona in ``instructions.txt``.
 
-* The Graphiti group_id used for queries is ``f"student-{student_name}"``
-  — dash form, **never** the rejected double-underscore form.
-* :meth:`GraphitiClient.search_student_progress` returns a dict with keys
-  ``student_name``, ``streak_days``, ``level_name``, ``recent_xp``,
-  ``near_achievements``, ``topic_confidence`` and ``data_available``. On
-  any failure it returns ``{"data_available": False, "error": "..."}``.
-
-Graceful degradation (scope §5.2 #2): when Graphiti is unreachable the
-tool **must never crash the conversation**. It returns a narration-friendly
-dict that includes ``data_available=False``, an ``error`` message and a
+Graceful degradation (scope §5.2 #2): when the tutor is unreachable the tool
+**must never crash the conversation**. It returns a narration-friendly dict
+that includes ``data_available=False``, an ``error`` message and a
 ``narration_hint`` field instructing the LLM to acknowledge no data is
-available.
+available rather than fabricating progress. This is also the live behaviour
+until the ``:8100`` adapter ships the student-model read endpoint (see
+:data:`common.tutor_client.STUDENT_MODEL_PATH`).
 """
 
 from __future__ import annotations
@@ -29,15 +28,19 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from common.graphiti_client import GraphitiClient
+from common.subject import DEFAULT_SUBJECT
+from common.tutor_client import TutorClient, TutorUnavailableError
 
 logger = logging.getLogger(__name__)
 
 #: Default student name (per scope §6 A6 — Lilymay is the hackathon student).
 DEFAULT_STUDENT_NAME = "lilymay"
 
-#: Default subject for the Scholar persona (per scope §2 D5 — English).
-DEFAULT_SUBJECT = "english"
+# ``DEFAULT_SUBJECT`` is re-exported from :mod:`common.subject`, the single
+# source of truth for the tutoring default subject (recon D6 / ASSUM-001).
+# Both this tool and ``ask_tutor`` resolve their default from that one place,
+# so ``resume_if_active``'s ``(student, subject)`` match can never miss on a
+# divergent default.
 
 #: Narration hint baked into the unreachable-degraded response so the LLM
 #: knows to acknowledge missing data instead of fabricating progress.
@@ -48,19 +51,16 @@ _NARRATION_HINT_NO_DATA = (
 )
 
 
-def _ensure_narration_friendly(
-    progress: dict[str, Any], student_name: str
-) -> dict[str, Any]:
-    """Augment a degraded-Graphiti response with narration hints.
+def _ensure_narration_friendly(progress: dict[str, Any], student_name: str) -> dict[str, Any]:
+    """Augment a degraded read with narration hints.
 
-    The ``GraphitiClient`` already returns ``{"data_available": False,
-    "error": "..."}`` on connection / auth failures. The Scholar tool layers
-    on a ``narration_hint`` and a ``student_name`` so the LLM can produce a
+    When the durable read is unavailable the tool returns
+    ``{"data_available": False, "error": "..."}``; this layers on a
+    ``narration_hint`` and a ``student_name`` so the LLM can produce a
     natural in-character apology rather than crashing.
 
     Args:
-        progress: The dict returned by
-            :meth:`GraphitiClient.search_student_progress`.
+        progress: The learning-record dict (or a degraded stub).
         student_name: The student name used for the query (defaulted by the
             tool when the LLM omits it).
 
@@ -74,7 +74,7 @@ def _ensure_narration_friendly(
 
     augmented: dict[str, Any] = dict(progress)
     augmented.setdefault("student_name", student_name)
-    augmented.setdefault("error", "graphiti unavailable")
+    augmented.setdefault("error", "student model unavailable")
     augmented["narration_hint"] = _NARRATION_HINT_NO_DATA
     augmented["data_available"] = False
     return augmented
@@ -94,25 +94,23 @@ try:
         Tool as _PollenTool,
     )
 except ImportError:  # pragma: no cover — exercised only in non-Pollen envs
-    logger.debug(
-        "reachy_mini_conversation_app not installed — using fallback Tool base"
-    )
+    logger.debug("reachy_mini_conversation_app not installed — using fallback Tool base")
 
     class _PollenTool:  # type: ignore[no-redef]
         """Minimal stand-in so the tool class is importable standalone."""
 
         name: str = ""
         description: str = ""
-        parameters: dict[str, Any] = {}
+        parameters_schema: dict[str, Any] = {}
 
 
 class QueryStudentModelTool(_PollenTool):  # type: ignore[misc]
-    """Look up a student's current study progress from the knowledge graph.
+    """Look up a student's current study progress from the durable store.
 
     Call this whenever someone asks how revision is going, what
     achievements are close to being unlocked, or what topic to study next.
-    The progress dict is read live from Graphiti via
-    :class:`common.graphiti_client.GraphitiClient`.
+    The progress dict is read live from the study-tutor adapter on ``:8100``
+    via :class:`common.tutor_client.TutorClient`.
     """
 
     name = "query_student_model"
@@ -136,8 +134,8 @@ class QueryStudentModelTool(_PollenTool):  # type: ignore[misc]
             "student_name": {
                 "type": "string",
                 "description": (
-                    "Identifier of the student in the Graphiti graph "
-                    "(without the 'student-' prefix). Defaults to 'lilymay'."
+                    "Identifier of the student. Server derives identity from "
+                    "the token; this is a hint. Defaults to 'lilymay'."
                 ),
                 "default": DEFAULT_STUDENT_NAME,
             },
@@ -146,11 +144,11 @@ class QueryStudentModelTool(_PollenTool):  # type: ignore[misc]
     }
 
     async def __call__(self, deps: Any = None, **kwargs: Any) -> dict[str, Any]:
-        """Execute the student model query.
+        """Execute the student model query against the durable store.
 
-        Constructs a fresh :class:`GraphitiClient` per call (mirrors the
-        connect-per-call pattern in ``common.graphiti_client``) with the
-        per-student ``group_id`` ``f"student-{student_name}"``.
+        Constructs a fresh :class:`TutorClient` per call (connect-per-call,
+        mirroring ``ask_jarvis``/``ask_tutor``) and reads the student's
+        learning record over the ``:8100`` HTTP adapter.
 
         Args:
             deps: ToolDependencies (unused, required by Pollen interface).
@@ -158,18 +156,27 @@ class QueryStudentModelTool(_PollenTool):  # type: ignore[misc]
                 default per the module constants.
 
         Returns:
-            Dict from
-            :meth:`GraphitiClient.search_student_progress`. When
-            ``data_available`` is ``False`` the dict is augmented with a
-            ``narration_hint`` field instructing the LLM to acknowledge
-            missing data — Scholar must never crash the conversation
+            The learning-record dict. When the read is unavailable the dict
+            is degraded with ``data_available=False`` and a
+            ``narration_hint`` — Scholar must never crash the conversation
             (scope §5.2 #2).
         """
         subject: str = kwargs.get("subject", DEFAULT_SUBJECT)
         student_name: str = kwargs.get("student_name", DEFAULT_STUDENT_NAME)
-        client = GraphitiClient(default_group_ids=[f"student-{student_name}"])
+        client = TutorClient()
         try:
-            progress = await client.search_student_progress(student_name, subject)
+            progress = await client.get_student_model(subject, student_name)
+        except TutorUnavailableError as exc:
+            logger.info(
+                "QueryStudentModelTool: study-tutor unavailable for %s/%s: %s",
+                student_name,
+                subject,
+                exc,
+            )
+            return _ensure_narration_friendly(
+                {"data_available": False, "error": str(exc)},
+                student_name,
+            )
         except Exception as exc:  # noqa: BLE001 — must never bubble out of tool
             logger.exception(
                 "QueryStudentModelTool unexpected failure for %s/%s",
@@ -186,7 +193,7 @@ class QueryStudentModelTool(_PollenTool):  # type: ignore[misc]
 
         if not isinstance(progress, dict):
             logger.warning(
-                "QueryStudentModelTool got non-dict from GraphitiClient: %r",
+                "QueryStudentModelTool got non-dict from TutorClient: %r",
                 progress,
             )
             return _ensure_narration_friendly(
