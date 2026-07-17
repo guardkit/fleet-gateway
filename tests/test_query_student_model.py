@@ -25,14 +25,41 @@ from reachy.external_content.external_tools.query_student_model import (
 from tests.conftest import install_mock_transport
 from tests.test_tutor_client import make_tutor_handler
 
+# Mirrors the live ``GET /api/student-model`` body (study-tutor
+# ``build_student_model_response``): ``near_achievements`` is a list of
+# objects, and the §2.2.1 enrichment fields ride alongside the original R05
+# fields. The tool consumes the body opaquely (only ``data_available`` is
+# load-bearing), so this shape exercises pass-through fidelity to the narrator.
 HAPPY_RECORD = {
     "student_name": "lilymay",
     "streak_days": 5,
     "level_name": "Knight",
     "recent_xp": 240,
-    "near_achievements": ["7-day streak"],
+    "near_achievements": [
+        {
+            "id": "streak-7",
+            "name": "7-day streak",
+            "description": "Study seven days in a row",
+            "progress": 5,
+            "target": 7,
+            "hint": "Two more days to go",
+        }
+    ],
     "topic_confidence": {"reading": 0.7, "writing": 0.55},
     "data_available": True,
+    # -- §2.2.1 enrichment (additive; passed through untouched) --------------
+    "total_xp": 1240,
+    "level_number": 3,
+    "longest_streak": 9,
+    "recent_achievements": [
+        {
+            "id": "first-session",
+            "name": "First session",
+            "unlocked_at": "2026-07-10T09:00:00+00:00",
+            "xp_awarded": 50,
+        }
+    ],
+    "next_unlock": {"level": 4, "feature": "Custom avatar"},
 }
 
 
@@ -81,7 +108,7 @@ async def test_forwards_subject_and_student_as_query_params(
 async def test_when_tutor_unavailable_returns_narration_hint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A non-2xx read (incl. the pending endpoint's 404) degrades gracefully."""
+    """A non-2xx read (transport error / 4xx / 5xx) degrades gracefully."""
     install_mock_transport(monkeypatch, make_tutor_handler(student_status=503))
 
     tool = QueryStudentModelTool()

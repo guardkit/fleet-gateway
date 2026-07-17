@@ -63,14 +63,14 @@ _DEFAULT_TIMEOUT = 120.0
 #: Student-model read path (recon D2 / FEAT-VOICE-004 R05).
 #:
 #: .. note::
-#:    **Pending a study-tutor endpoint.** As of the FEAT-VOICE-004 build the
-#:    ``:8100`` adapter registers only the six session verbs plus the voice
-#:    routes — there is no student-model read surface yet. This path is the
-#:    forward-compatible target: :meth:`TutorClient.get_student_model`
-#:    degrades gracefully (``TutorUnavailableError`` → "no data") until the
-#:    adapter ships it, at which point the read lights up with no tool
-#:    change. Kept as a single constant so the eventual path is a one-line
-#:    reconciliation.
+#:    **Live.** The ``:8100`` adapter serves ``GET /api/student-model`` (a
+#:    bearer-authenticated read of the durable Postgres-backed learner
+#:    record; study-tutor ``src/study_tutor/http/app.py`` ``student_model``).
+#:    :meth:`TutorClient.get_student_model` reads it directly and still
+#:    degrades gracefully (``TutorUnavailableError`` → "no data") on any
+#:    transport error, non-2xx (incl. an unseeded/rejected bearer → 401), or
+#:    malformed body. Kept as a single constant so the path stays a one-line
+#:    source of truth.
 STUDENT_MODEL_PATH = "/api/student-model"
 
 
@@ -238,9 +238,9 @@ class TutorClient:
             The decoded learning-record object.
 
         Raises:
-            TutorUnavailableError: On any failure (see the note on
-                :data:`STUDENT_MODEL_PATH` — currently every live call
-                until the adapter ships the read endpoint).
+            TutorUnavailableError: On any failure — transport error, any
+                non-2xx status (incl. an unseeded/rejected bearer → 401), or
+                a malformed/non-object body (see :data:`STUDENT_MODEL_PATH`).
         """
         params: dict[str, str] = {"subject": subject}
         if student_name is not None:

@@ -18,9 +18,9 @@ Graceful degradation (scope §5.2 #2): when the tutor is unreachable the tool
 **must never crash the conversation**. It returns a narration-friendly dict
 that includes ``data_available=False``, an ``error`` message and a
 ``narration_hint`` field instructing the LLM to acknowledge no data is
-available rather than fabricating progress. This is also the live behaviour
-until the ``:8100`` adapter ships the student-model read endpoint (see
-:data:`common.tutor_client.STUDENT_MODEL_PATH`).
+available rather than fabricating progress. This also covers an unseeded or
+rejected bearer (adapter → 401) against the live ``GET /api/student-model``
+read endpoint (see :data:`common.tutor_client.STUDENT_MODEL_PATH`).
 """
 
 from __future__ import annotations
