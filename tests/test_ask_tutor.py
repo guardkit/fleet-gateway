@@ -42,6 +42,9 @@ def test_ask_tutor_conforms_to_tool_abc() -> None:
     assert "question" in tool.parameters_schema["properties"], (
         "question is the accepted alias for message (R-G3 live finding)"
     )
+    assert "query" in tool.parameters_schema["properties"], (
+        "query is the second accepted alias (R-G3 live finding)"
+    )
     # message-or-question is enforced at call time; schema keeps required empty
     # because JSON-schema can't express the alias without anyOf.
     assert tool.parameters_schema["required"] == []

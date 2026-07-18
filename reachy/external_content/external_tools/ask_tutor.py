@@ -103,6 +103,12 @@ class AskTutorTool(_PollenTool):  # type: ignore[misc]
                     "(observed live at R-G3); provide message OR question."
                 ),
             },
+            "query": {
+                "type": "string",
+                "description": (
+                    "Second alias for message (also observed live at R-G3)."
+                ),
+            },
             "subject": {
                 "type": "string",
                 "description": (
@@ -138,7 +144,9 @@ class AskTutorTool(_PollenTool):  # type: ignore[misc]
             ``{"response": TUTOR_OFFLINE_MESSAGE}`` for *every* failure mode.
             Never raises.
         """
-        message = kwargs.get("message") or kwargs.get("question") or ""
+        message = (
+            kwargs.get("message") or kwargs.get("question") or kwargs.get("query") or ""
+        )
         if not isinstance(message, str) or not message.strip():
             return {"error": "No message provided"}
 
