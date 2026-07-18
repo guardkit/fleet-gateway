@@ -96,6 +96,13 @@ class AskTutorTool(_PollenTool):  # type: ignore[misc]
                 "type": "string",
                 "description": ("The student's tutoring question or request, in natural language."),
             },
+            "question": {
+                "type": "string",
+                "description": (
+                    "Alias for message — models routinely reach for this name "
+                    "(observed live at R-G3); provide message OR question."
+                ),
+            },
             "subject": {
                 "type": "string",
                 "description": (
@@ -106,7 +113,10 @@ class AskTutorTool(_PollenTool):  # type: ignore[misc]
                 "default": DEFAULT_SUBJECT,
             },
         },
-        "required": ["message"],
+        # message-or-question is enforced at call time; JSON-schema "required"
+        # can't express the alias without anyOf, which realtime validators
+        # handle inconsistently.
+        "required": [],
     }
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -119,15 +129,16 @@ class AskTutorTool(_PollenTool):  # type: ignore[misc]
 
         Args:
             deps: ToolDependencies (unused, required by Pollen interface).
-            **kwargs: ``message`` (the question, required) and an optional
-                ``subject`` (falls back to the shared default, never empty).
+            **kwargs: ``message`` (the question — ``question`` accepted as an
+                alias) and an optional ``subject`` (falls back to the shared
+                default, never empty).
 
         Returns:
             ``{"response": <tutor text>}`` on success, or
             ``{"response": TUTOR_OFFLINE_MESSAGE}`` for *every* failure mode.
             Never raises.
         """
-        message = kwargs.get("message", "")
+        message = kwargs.get("message") or kwargs.get("question") or ""
         if not isinstance(message, str) or not message.strip():
             return {"error": "No message provided"}
 

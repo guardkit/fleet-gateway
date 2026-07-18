@@ -39,7 +39,34 @@ def test_ask_tutor_conforms_to_tool_abc() -> None:
     assert not hasattr(tool, "run"), "must not use the rejected 'run' method"
     assert tool.name == "ask_tutor"
     assert "message" in tool.parameters_schema["properties"]
-    assert tool.parameters_schema["required"] == ["message"]
+    assert "question" in tool.parameters_schema["properties"], (
+        "question is the accepted alias for message (R-G3 live finding)"
+    )
+    # message-or-question is enforced at call time; schema keeps required empty
+    # because JSON-schema can't express the alias without anyOf.
+    assert tool.parameters_schema["required"] == []
+
+
+async def test_question_alias_behaves_as_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R-G3 live finding: models call ask_tutor(question=...) — must work."""
+    record: list[httpx.Request] = []
+    install_mock_transport(
+        monkeypatch, make_tutor_handler(record=record, tutor_response="A comparison.")
+    )
+    tool = AskTutorTool()
+
+    result = await tool(question="What is a metaphor?")
+
+    assert result == {"response": "A comparison."}
+    assert _paths(record) == ["/api/sessions/start", "/api/sessions/sess-1/turn"]
+
+
+async def test_neither_message_nor_question_is_error() -> None:
+    tool = AskTutorTool()
+    result = await tool()
+    assert result == {"error": "No message provided"}
 
 
 # ---------------------------------------------------------------------------
